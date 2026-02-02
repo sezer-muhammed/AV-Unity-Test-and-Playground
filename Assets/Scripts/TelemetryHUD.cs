@@ -21,6 +21,10 @@ public class TelemetryHUD : MonoBehaviour
     public float labelWidth = 180f;
     public float valueWidth = 320f;
 
+    [Header("Screen Margins")]
+    public float leftMargin = 10f;
+    public float bottomMargin = 88f;
+
     [Header("Bars")]
     public float barWidth = 240f;
     public float barHeight = 14f;
@@ -81,7 +85,7 @@ public class TelemetryHUD : MonoBehaviour
 
         EnsureStyles();
 
-        Rect boxRect = new Rect(10, Screen.height - panelHeight - 10, panelWidth, panelHeight);
+        Rect boxRect = new Rect(leftMargin, Screen.height - panelHeight - bottomMargin, panelWidth, panelHeight);
         DrawRect(boxRect, backgroundColor);
 
         float x = boxRect.x + padding.x;
@@ -137,13 +141,23 @@ public class TelemetryHUD : MonoBehaviour
 
         if (car != null)
         {
+            string brakeFlag = car.DebugIsBraking ? "<color=#FF6B6B><b>BRAKE</b></color>" : "BRAKE";
+            string tcFlag = (car.tractionControlEnabled && car.DebugTractionControlActive) ? "<color=#FFD166><b>TC</b></color>" : (car.tractionControlEnabled ? "TC" : "<color=#888888>TC</color>");
+            string hbFlag = car.DebugHandbrakePressed ? "<color=#FFD166><b>HB</b></color>" : "HB";
+            string extFlag = car.useExternalInput ? "<color=#9BE7FF><b>EXT</b></color>" : "EXT";
+            DrawRow(rect, ref cursorY, "FLAGS", $"{brakeFlag}  |  {tcFlag}  |  {hbFlag}  |  {extFlag}");
+        }
+
+        if (car != null)
+        {
             DrawRow(rect, ref cursorY, "Mode", car.useExternalInput ? "External" : "Player");
             DrawRow(rect, ref cursorY, "Speed (Pos, smooth)", $"{car.DebugSpeedFromPositionKmhSmoothed:0.0} km/h");
             DrawRow(rect, ref cursorY, "Speed (RB, smooth)", $"{car.DebugSpeedFromRigidbodyKmhSmoothed:0.0} km/h");
             DrawRow(rect, ref cursorY, "Speed (wheel)", $"{car.carSpeed:0.0} km/h");
+            DrawRow(rect, ref cursorY, "Speed (wheel avg)", $"{car.DebugWheelSpeedKmhAvg:0.0} km/h");
             DrawRow(rect, ref cursorY, "Forward v/a", $"{car.DebugForwardSpeedMS:0.00} m/s   {car.DebugForwardAccelMS2:0.00} m/s²");
             DrawRow(rect, ref cursorY, "Steer angle", $"{car.DebugFrontSteerAngle:0.0}° / {car.maxSteeringAngle}°");
-            DrawRow(rect, ref cursorY, "TractionCtrl", $"slip={car.DebugSlipKmh:0.0} km/h  torqueScale={car.DebugTorqueScale:0.00}");
+            DrawRow(rect, ref cursorY, "TractionCtrl", $"slip={car.DebugSlipKmh:0.0} km/h  scale={car.DebugTorqueScale:0.00}  {(car.DebugTractionControlActive ? "(ACTIVE)" : "")}");
 
             if (car.useExternalInput)
             {
@@ -185,6 +199,7 @@ public class TelemetryHUD : MonoBehaviour
             DrawRow(rect, ref cursorY, "Target / desired", $"{pursuit.targetSpeed:0.0} / {pursuit.debugDesiredSpeedKmh:0.0} km/h");
             DrawRow(rect, ref cursorY, "LookAhead", $"{pursuit.lookAheadDistance:0.0}");
             DrawRow(rect, ref cursorY, "Speed PID", $"{(pursuit.useSpeedPid ? "ON" : "off")}  Kp={pursuit.speedKp:0.000} Ki={pursuit.speedKi:0.000} Kd={pursuit.speedKd:0.000}");
+            DrawRow(rect, ref cursorY, "Accel cmd", $"raw={pursuit.debugAccelCmdRaw:0.00}  filt={pursuit.debugAccelCmdFiltered:0.00}");
         }
     }
 
@@ -200,29 +215,38 @@ public class TelemetryHUD : MonoBehaviour
             return;
         }
 
-        float steerVal;
-        float throttleVal;
+        float cmdSteer;
+        float cmdAccel;
+        float appliedSteer;
+        float appliedThrottle;
         string src;
 
         if (car.useExternalInput)
         {
             src = "External";
-            steerVal = Mathf.Clamp(car.externalSteering, -1f, 1f);
-            throttleVal = Mathf.Clamp(car.externalAcceleration, -1f, 1f);
+            cmdSteer = Mathf.Clamp(car.externalSteering, -1f, 1f);
+            cmdAccel = Mathf.Clamp(car.externalAcceleration, -1f, 1f);
         }
         else
         {
             src = "Player";
-            steerVal = Mathf.Clamp(car.DebugMoveInput.x, -1f, 1f);
-            throttleVal = Mathf.Clamp(car.DebugMoveInput.y, -1f, 1f);
+            cmdSteer = Mathf.Clamp(car.DebugMoveInput.x, -1f, 1f);
+            cmdAccel = Mathf.Clamp(car.DebugMoveInput.y, -1f, 1f);
         }
+
+        appliedSteer = Mathf.Clamp(car.DebugSteeringAxis, -1f, 1f);
+        appliedThrottle = Mathf.Clamp(car.DebugThrottleAxis, -1f, 1f);
 
         GUI.Label(new Rect(rect.x, cursorY, rect.width, rowHeight), $"Source: {src}", smallStyle);
         cursorY += rowHeight + 8f;
 
-        DrawSignedBar(new Rect(rect.x, cursorY, barWidth, barHeight), steerVal, "Steering");
+        DrawSignedBar(new Rect(rect.x, cursorY, barWidth, barHeight), cmdSteer, "Steer cmd");
+        cursorY += barHeight + 12f;
+        DrawSignedBar(new Rect(rect.x, cursorY, barWidth, barHeight), appliedSteer, "Steer applied");
         cursorY += barHeight + 18f;
-        DrawSignedBar(new Rect(rect.x, cursorY, barWidth, barHeight), throttleVal, "Throttle / Brake");
+        DrawSignedBar(new Rect(rect.x, cursorY, barWidth, barHeight), cmdAccel, "Accel cmd");
+        cursorY += barHeight + 12f;
+        DrawSignedBar(new Rect(rect.x, cursorY, barWidth, barHeight), appliedThrottle, "Throttle axis");
     }
 
     void DrawRow(Rect rect, ref float y, string label, string value)

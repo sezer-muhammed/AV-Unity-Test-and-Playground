@@ -38,8 +38,18 @@ public class PurePursuitController : MonoBehaviour
     [Min(0f)]
     public float accelOutputDeadzone = 0.02f;
 
+    [Header("Acceleration Command Smoothing")]
+    [Tooltip("Low-pass filter time constant for externalAcceleration to prevent jitter.")]
+    [Min(0f)]
+    public float accelCommandSmoothingTimeSeconds = 0.15f;
+    [Tooltip("Optional output slew-rate limit (command units per second). Set 0 to disable.")]
+    [Min(0f)]
+    public float accelCommandRateLimitPerSecond = 4.0f;
+
     [Header("Debug")]
     public float debugDesiredSpeedKmh;
+    public float debugAccelCmdRaw;
+    public float debugAccelCmdFiltered;
 
     [Header("Logic Settings")]
     public float arrivalThreshold = 3.0f;
@@ -53,6 +63,8 @@ public class PurePursuitController : MonoBehaviour
 
     private float speedIntegral;
     private float lastSpeedError;
+
+    private float accelCmdFiltered;
 
     void Start()
     {
@@ -154,7 +166,14 @@ public class PurePursuitController : MonoBehaviour
         float speedFactor = Mathf.Clamp01(1.2f - steerAbs); // slow down slightly in hard turns
         float desiredSpeed = targetSpeed * speedFactor;
         debugDesiredSpeedKmh = desiredSpeed;
-        carController.externalAcceleration = ComputeAccelerationCommand(desiredSpeed);
+
+        float rawAccelCmd = ComputeAccelerationCommand(desiredSpeed);
+        debugAccelCmdRaw = rawAccelCmd;
+
+        float filteredAccelCmd = FilterAccelerationCommand(rawAccelCmd);
+        debugAccelCmdFiltered = filteredAccelCmd;
+
+        carController.externalAcceleration = filteredAccelCmd;
 
         if (targetingLine != null) DrawTelemetry(targetPoint);
     }
@@ -198,17 +217,26 @@ public class PurePursuitController : MonoBehaviour
     {
         if (carController == null) return 0f;
 
+        // Use robust speed estimate for control (wheel RPM can lie under slip).
+        float currentSpeedKmh = carController.DebugSpeedFromPositionKmhSmoothed;
+        if (currentSpeedKmh <= 0.001f)
+            currentSpeedKmh = carController.DebugSpeedFromRigidbodyKmhSmoothed;
+        if (currentSpeedKmh <= 0.001f)
+            currentSpeedKmh = carController.DebugSpeedFromRigidbodyKmh;
+        if (currentSpeedKmh <= 0.001f)
+            currentSpeedKmh = carController.carSpeed;
+
         // If PID disabled, fall back to simple bang-bang throttle.
         if (!useSpeedPid)
         {
-            return (carController.carSpeed < desiredSpeedKmh) ? accelerationSensitivity : 0f;
+            return (currentSpeedKmh < desiredSpeedKmh) ? accelerationSensitivity : 0f;
         }
 
         float dt = Time.fixedDeltaTime;
         if (dt <= 0f) dt = 0.02f;
 
         // carSpeed is already in km/h.
-        float speedError = desiredSpeedKmh - carController.carSpeed;
+        float speedError = desiredSpeedKmh - currentSpeedKmh;
 
         // Integrator management: if we don't allow braking (reverse), don't wind up negative.
         if (!allowReverseForBraking && speedError < 0f)
@@ -236,10 +264,40 @@ public class PurePursuitController : MonoBehaviour
         return cmd;
     }
 
+    float FilterAccelerationCommand(float rawCmd)
+    {
+        float dt = Time.fixedDeltaTime;
+        if (dt <= 0f) dt = 0.02f;
+
+        float target = Mathf.Clamp(rawCmd, -1f, 1f);
+
+        // Slew-rate limit first (prevents sharp flips near zero).
+        if (accelCommandRateLimitPerSecond > 0.001f)
+        {
+            float maxDelta = accelCommandRateLimitPerSecond * dt;
+            target = Mathf.Clamp(target, accelCmdFiltered - maxDelta, accelCmdFiltered + maxDelta);
+        }
+
+        if (accelCommandSmoothingTimeSeconds <= 0.0001f)
+        {
+            accelCmdFiltered = target;
+        }
+        else
+        {
+            float alpha = 1f - Mathf.Exp(-dt / accelCommandSmoothingTimeSeconds);
+            accelCmdFiltered = Mathf.Lerp(accelCmdFiltered, target, alpha);
+        }
+
+        return accelCmdFiltered;
+    }
+
     void ResetSpeedPid()
     {
         speedIntegral = 0f;
         lastSpeedError = 0f;
+        accelCmdFiltered = 0f;
+        debugAccelCmdRaw = 0f;
+        debugAccelCmdFiltered = 0f;
     }
 
 

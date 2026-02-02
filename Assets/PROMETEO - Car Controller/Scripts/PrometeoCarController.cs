@@ -181,6 +181,9 @@ public class PrometeoCarController : MonoBehaviour
 
       public float DebugSlipKmh => slipKmh;
       public float DebugTorqueScale => torqueScale;
+      public float DebugWheelSpeedKmhAvg => wheelSpeedKmhAvg;
+      public bool DebugIsBraking => isBrakingNow;
+      public bool DebugTractionControlActive => tractionControlActive;
 
       public bool DebugUseHorsepowerModel => useHorsepowerModel;
       public float DebugHorsepower => horsepower;
@@ -235,6 +238,9 @@ public class PrometeoCarController : MonoBehaviour
 
       float slipKmh;
       float torqueScale = 1f;
+      float wheelSpeedKmhAvg;
+      bool isBrakingNow;
+      bool tractionControlActive;
 
     // Start is called before the first frame update
     void Start()
@@ -340,6 +346,7 @@ public class PrometeoCarController : MonoBehaviour
       // Wheel RPM speed can be misleading under slip; keep it as legacy carSpeed,
       // but also compute a Rigidbody-based speed for telemetry and AI.
       carSpeed = (2 * Mathf.PI * frontLeftCollider.radius * frontLeftCollider.rpm * 60) / 1000;
+      wheelSpeedKmhAvg = ComputeAverageWheelSpeedKmh();
       speedFromRigidbodyKmh = (carRigidbody != null) ? (carRigidbody.linearVelocity.magnitude * 3.6f) : carSpeed;
 
       // Position-delta speed (robust even if wheel RPM is wrong)
@@ -643,6 +650,8 @@ public class PrometeoCarController : MonoBehaviour
       // accelCmd is expected in [-1..1]. Positive = forward, negative = reverse.
       float cmd = Mathf.Clamp(accelCmd, -1f, 1f);
 
+      isBrakingNow = false;
+
       // Drifting FX logic (same as forward/reverse)
       if(Mathf.Abs(localVelocityX) > 2.5f){
         isDrifting = true;
@@ -667,11 +676,13 @@ public class PrometeoCarController : MonoBehaviour
       if (throttleAxis > 0f && localVelocityZ < -1f)
       {
         Brakes();
+        isBrakingNow = true;
         return;
       }
       if (throttleAxis < 0f && localVelocityZ > 1f)
       {
         Brakes();
+        isBrakingNow = true;
         return;
       }
 
@@ -712,6 +723,7 @@ public class PrometeoCarController : MonoBehaviour
           frontRightCollider.brakeTorque = brakeForce * brake;
           rearLeftCollider.brakeTorque = brakeForce * brake;
           rearRightCollider.brakeTorque = brakeForce * brake;
+          isBrakingNow = brake > 0.01f;
           return;
         }
 
@@ -823,12 +835,13 @@ public class PrometeoCarController : MonoBehaviour
       {
         slipKmh = 0f;
         torqueScale = 1f;
+        tractionControlActive = false;
         return;
       }
 
       // Use smoothed RB speed for stability.
       float rbKmh = speedFromRigidbodyKmhSmoothed > 0.001f ? speedFromRigidbodyKmhSmoothed : speedFromRigidbodyKmh;
-      float wheelKmh = carSpeed;
+      float wheelKmh = wheelSpeedKmhAvg > 0.001f ? wheelSpeedKmhAvg : carSpeed;
 
       // Positive means wheels are spinning faster than actual motion (slip).
       float signedSlip = wheelKmh - rbKmh;
@@ -847,6 +860,31 @@ public class PrometeoCarController : MonoBehaviour
       if (dt <= 0f) dt = 0.02f;
       float alpha = 1f - Mathf.Exp(-dt * tcResponse);
       torqueScale = Mathf.Lerp(torqueScale, desired, alpha);
+
+      // Flag for HUD: traction control is currently limiting.
+      tractionControlActive = (desired < 0.999f) || (torqueScale < 0.999f);
+    }
+
+    float ComputeAverageWheelSpeedKmh()
+    {
+      float sum = 0f;
+      int count = 0;
+
+      AccumulateWheelSpeed(frontLeftCollider, ref sum, ref count);
+      AccumulateWheelSpeed(frontRightCollider, ref sum, ref count);
+      AccumulateWheelSpeed(rearLeftCollider, ref sum, ref count);
+      AccumulateWheelSpeed(rearRightCollider, ref sum, ref count);
+
+      if (count <= 0) return 0f;
+      return sum / count;
+    }
+
+    static void AccumulateWheelSpeed(WheelCollider wc, ref float sumKmh, ref int count)
+    {
+      if (wc == null) return;
+      float kmh = (2f * Mathf.PI * wc.radius * wc.rpm * 60f) / 1000f;
+      sumKmh += Mathf.Abs(kmh);
+      count++;
     }
 
     // The following method decelerates the speed of the car according to the decelerationMultiplier variable, where
