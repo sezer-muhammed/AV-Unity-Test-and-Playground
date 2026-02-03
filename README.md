@@ -1,4 +1,4 @@
-# Prometheus Advanced Vehicle Simulation (TestAV)
+# Prometheus Advanced Vehicle Simulation
 
 A high-fidelity, modular vehicle physics backbone for Unity, bridging the gap between game development and realistic simulation. This project features a custom-built powertrain system, SAE-standard slip calculations, and a robust telemetry logging suite.
 
@@ -12,7 +12,7 @@ The project is built on a modular "Component-Link" architecture, separating mech
 | **Drivetrain** | Power Distribution | AWD (25% per wheel), Drivetrain Elasticity (Jerk reduction) |
 | **Telemetry** | Data Acquisition | 50Hz FixedUpdate logging, SAE Slip Ratio, JSON serialization |
 
-## 📊 Default Simulation Parameters (The "Wow" Specs)
+## 📊 Default Simulation Parameters
 
 The vehicle comes pre-tuned with balanced "Performance Sedan" metrics. Every value is exposed for real-time optimization.
 
@@ -66,6 +66,3 @@ This provides high-fidelity data for the built-in **Traction Control (TC)** whic
 *   **[S] Brake:** Physical resistance torque (All 4 wheels).
 *   **[Q] Gear Mode:** Cycle **Drive -> Neutral -> Reverse**.
 *   **[Space] Handbrake:** Mechanical lock of rear axles (**6,500 Nm**).
-
-## 🚀 Telemetry
-Every frame is recorded to `VehicleTelemetry.json`. This data is compatible with external PID optimization tools or AI training scripts.
