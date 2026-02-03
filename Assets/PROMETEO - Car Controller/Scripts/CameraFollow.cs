@@ -1,42 +1,47 @@
-﻿using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
-public class CameraFollow : MonoBehaviour {
+public class CameraFollow : MonoBehaviour
+{
+    public Transform carTransform;
 
-	public Transform carTransform;
-	[Range(1, 20)]
-	public float followSpeed = 10;
-	[Range(1, 20)]
-	public float lookSpeed = 10;
-    
-    [Header("Camera Configuration")]
-    public float distance = 10.0f;
-    public float angle = 20.0f;
-    public Vector3 vehicleOffset = new Vector3(0, 1.5f, 0);
+    [Header("Tracking Sliders")]
+    [Range(2, 10)]
+    public float distance = 6f;
+    [Range(-90, 90)]
+    public float verticalAngle = 20f; // Up / Down
+    [Range(-180, 180)]
+    public float orbitAngle = 0f;    // Around the car
 
-	void LateUpdate()
-	{
+    [Header("Refinement")]
+    public float followSpeed = 10f;
+    public float lookSpeed = 10f;
+    public Vector3 targetOffset = new Vector3(0, 1.5f, 0);
+
+    void LateUpdate()
+    {
         if (carTransform == null) return;
 
-        // Calculate the relative target position based on distance and angle
-        // Angle is the vertical tilt, distance is how far back the camera stays
-        float radAngle = angle * Mathf.Deg2Rad;
-        Vector3 localOffset = new Vector3(0, Mathf.Sin(radAngle) * distance, -Mathf.Cos(radAngle) * distance);
-        
-        // Move to the position relative to the car's orientation
-        Vector3 targetPos = carTransform.position + carTransform.rotation * localOffset;
-		transform.position = Vector3.Lerp(transform.position, targetPos, followSpeed * Time.deltaTime);
+        // 1. Calculate the rotation for the camera offset
+        // This combines the car's current heading with the user's custom orbit settings
+        Quaternion rotation = carTransform.rotation * Quaternion.Euler(verticalAngle, orbitAngle, 0);
 
-		// Calculate look direction including the vehicle offset
-        Vector3 targetLookAt = carTransform.position + carTransform.rotation * vehicleOffset;
-		Vector3 lookDirection = targetLookAt - transform.position;
-		
+        // 2. Define the target point we are orbiting (the car's center + offset)
+        Vector3 worldTargetOffset = carTransform.rotation * targetOffset;
+        Vector3 targetPoint = carTransform.position + worldTargetOffset;
+
+        // 3. Calculate target position
+        // We move backwards from the target point based on the rotation and distance
+        Vector3 targetPos = targetPoint + (rotation * Vector3.back * distance);
+
+        // 4. Smoothly interpolate position
+        transform.position = Vector3.Lerp(transform.position, targetPos, followSpeed * Time.deltaTime);
+
+        // 5. Rotate to look at the target point
+        Vector3 lookDirection = targetPoint - transform.position;
         if (lookDirection != Vector3.zero)
         {
-             Quaternion targetRot = Quaternion.LookRotation(lookDirection, Vector3.up);
-		    transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, lookSpeed * Time.deltaTime);
+            Quaternion targetRot = Quaternion.LookRotation(lookDirection, Vector3.up);
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, lookSpeed * Time.deltaTime);
         }
-	}
-
+    }
 }
