@@ -1031,6 +1031,15 @@
                     "processors": "",
                     "interactions": "",
                     "initialStateCheck": false
+                },
+                {
+                    "name": "GearShift",
+                    "type": "Button",
+                    "id": "a9a3f2b1-6b44-44b2-a4f6-829d1c1a1b1a",
+                    "expectedControlType": "Button",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
                 }
             ],
             "bindings": [
@@ -1097,6 +1106,17 @@
                     "processors": "",
                     "groups": "",
                     "action": "HandBrake",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "b1a1c1a1-a4f6-44b2-6b44-a9a3f2b1c1a1",
+                    "path": "<Keyboard>/q",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "GearShift",
                     "isComposite": false,
                     "isPartOfComposite": false
                 }

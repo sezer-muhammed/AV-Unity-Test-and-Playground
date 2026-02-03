@@ -113,6 +113,7 @@ public class PrometeoCarController : MonoBehaviour
     InputAction throttleAction;
     InputAction brakeAction;
     InputAction handbrakeAction;
+    InputAction gearShiftAction;
 
     Engine engine;
     Transmission transmission;
@@ -139,12 +140,42 @@ public class PrometeoCarController : MonoBehaviour
             throttleAction = inputActions.FindAction("Vehicle/Throttle");
             brakeAction = inputActions.FindAction("Vehicle/Brake");
             handbrakeAction = inputActions.FindAction("Vehicle/HandBrake");
+            gearShiftAction = inputActions.FindAction("Vehicle/GearShift");
             
             steeringAction?.Enable();
             throttleAction?.Enable();
             brakeAction?.Enable();
             handbrakeAction?.Enable();
+            gearShiftAction?.Enable();
+
+            if (gearShiftAction != null)
+            {
+                gearShiftAction.performed += _ => ToggleGearMode();
+            }
         }
+    }
+
+    void ToggleGearMode()
+    {
+        if (telemetry.carSpeed > 1f) return;
+
+        GearMode currentMode = transmission.Mode;
+        GearMode nextMode = currentMode;
+
+        switch (currentMode)
+        {
+            case GearMode.Drive:
+                nextMode = GearMode.Neutral;
+                break;
+            case GearMode.Neutral:
+                nextMode = GearMode.Reverse;
+                break;
+            case GearMode.Reverse:
+                nextMode = GearMode.Drive;
+                break;
+        }
+
+        transmission.SetMode(nextMode);
     }
 
     void InitializePowertrain()
@@ -179,7 +210,7 @@ public class PrometeoCarController : MonoBehaviour
         };
 
         engine = new Engine(engineConfig, telemetry);
-        transmission = new Transmission(transmissionConfig, telemetry);
+        transmission = new Transmission(transmissionConfig, reverseRatio, telemetry);
         drivetrain = new Drivetrain(drivetrainConfig, telemetry);
     }
 
@@ -220,18 +251,25 @@ public class PrometeoCarController : MonoBehaviour
 
     void CalculateWheelTelemetry()
     {
-        // Calculate physics-correct speed for all driven wheels (Rear wheels in this RWD model)
-        float wheelMS_L = GetWheelLinearSpeed(rearLeftCollider);
-        float groundMS_L = GetLongitudinalGroundSpeed(rearLeftCollider);
-        float slipL = CalculateSlipRatio(wheelMS_L, groundMS_L);
+        // AWD telemetry: Average of all wheels
+        float wheelMS_FL = GetWheelLinearSpeed(frontLeftCollider);
+        float wheelMS_FR = GetWheelLinearSpeed(frontRightCollider);
+        float wheelMS_RL = GetWheelLinearSpeed(rearLeftCollider);
+        float wheelMS_RR = GetWheelLinearSpeed(rearRightCollider);
 
-        float wheelMS_R = GetWheelLinearSpeed(rearRightCollider);
-        float groundMS_R = GetLongitudinalGroundSpeed(rearRightCollider);
-        float slipR = CalculateSlipRatio(wheelMS_R, groundMS_R);
+        float groundMS_FL = GetLongitudinalGroundSpeed(frontLeftCollider);
+        float groundMS_FR = GetLongitudinalGroundSpeed(frontRightCollider);
+        float groundMS_RL = GetLongitudinalGroundSpeed(rearLeftCollider);
+        float groundMS_RR = GetLongitudinalGroundSpeed(rearRightCollider);
+
+        float slipFL = CalculateSlipRatio(wheelMS_FL, groundMS_FL);
+        float slipFR = CalculateSlipRatio(wheelMS_FR, groundMS_FR);
+        float slipRL = CalculateSlipRatio(wheelMS_RL, groundMS_RL);
+        float slipRR = CalculateSlipRatio(wheelMS_RR, groundMS_RR);
 
         // Telemetry update
-        telemetry.wheelSpeed = ((wheelMS_L + wheelMS_R) / 2f) * 3.6f; // km/h
-        telemetry.wheelSlip = (slipL + slipR) / 2f;
+        telemetry.wheelSpeed = ((wheelMS_FL + wheelMS_FR + wheelMS_RL + wheelMS_RR) / 4f) * 3.6f; // km/h
+        telemetry.wheelSlip = (slipFL + slipFR + slipRL + slipRR) / 4f;
     }
 
     float GetWheelLinearSpeed(WheelCollider wc)
@@ -257,7 +295,8 @@ public class PrometeoCarController : MonoBehaviour
 
     void UpdatePowertrain(float dt)
     {
-        float avgDrivenWheelRPM = (rearLeftCollider.rpm + rearRightCollider.rpm) / 2f;
+        // AWD: Average RPM of all wheels
+        float avgDrivenWheelRPM = (frontLeftCollider.rpm + frontRightCollider.rpm + rearLeftCollider.rpm + rearRightCollider.rpm) / 4f;
         float wheelRPMToEngine = Mathf.Abs(avgDrivenWheelRPM) * transmission.TotalRatio;
         float throttleForRPM = useExternalInput ? Mathf.Abs(externalAcceleration) : Mathf.Abs(throttleInput);
 
@@ -287,26 +326,27 @@ public class PrometeoCarController : MonoBehaviour
         frontLeftCollider.steerAngle = finalAngle;
         frontRightCollider.steerAngle = finalAngle;
 
-        float forwardVel = Vector3.Dot(rb.linearVelocity, transform.forward);
-
         // Brakes & Acceleration
         if (handbrakePressed)
         {
-            ApplyBrakes(handbrakeTorque, 1.0f);
+            ApplyBrakes(handbrakeTorque, 1.0f, true);
         }
-        else if (brakeInput > 0.1f)
+        else if (brakeInput > 0.05f)
         {
-            // If moving forward, apply brakes
-            if (forwardVel > 1f) ApplyBrakes(maxBrakeTorque, brakeInput);
-            // If stationary or moving backward, apply reverse torque
-            else CalculateAndApplyTorque(-brakeInput);
+            ApplyBrakes(maxBrakeTorque, brakeInput, false);
         }
-        else if (throttleInput > 0.1f)
+        else
         {
-            // If moving backward, apply brakes
-            if (forwardVel < -1f) ApplyBrakes(maxBrakeTorque, throttleInput);
-            // If stationary or moving forward, apply torque
-            else CalculateAndApplyTorque(throttleInput);
+            // Reset brakes when not braking
+            frontLeftCollider.brakeTorque = 0;
+            frontRightCollider.brakeTorque = 0;
+            rearLeftCollider.brakeTorque = 0;
+            rearRightCollider.brakeTorque = 0;
+        }
+
+        if (throttleInput > 0.05f)
+        {
+            CalculateAndApplyTorque(throttleInput);
         }
         else
         {
@@ -324,21 +364,26 @@ public class PrometeoCarController : MonoBehaviour
         frontLeftCollider.steerAngle = finalAngle;
         frontRightCollider.steerAngle = finalAngle;
 
-        float forwardVel = Vector3.Dot(rb.linearVelocity, transform.forward);
-
-        if (externalAcceleration > 0.1f)
+        if (externalAcceleration > 0.05f)
         {
-            if (forwardVel < -1f) ApplyBrakes(maxBrakeTorque, externalAcceleration);
-            else CalculateAndApplyTorque(externalAcceleration);
+            CalculateAndApplyTorque(externalAcceleration);
+            frontLeftCollider.brakeTorque = 0;
+            frontRightCollider.brakeTorque = 0;
+            rearLeftCollider.brakeTorque = 0;
+            rearRightCollider.brakeTorque = 0;
         }
-        else if (externalAcceleration < -0.1f)
+        else if (externalAcceleration < -0.05f)
         {
-            if (forwardVel > 1f) ApplyBrakes(maxBrakeTorque, Mathf.Abs(externalAcceleration));
-            else CalculateAndApplyTorque(externalAcceleration);
+            ApplyBrakes(maxBrakeTorque, Mathf.Abs(externalAcceleration), false);
+            CalculateAndApplyTorque(0);
         }
         else
         {
             CalculateAndApplyTorque(0);
+            frontLeftCollider.brakeTorque = 0;
+            frontRightCollider.brakeTorque = 0;
+            rearLeftCollider.brakeTorque = 0;
+            rearRightCollider.brakeTorque = 0;
         }
     }
 
@@ -346,7 +391,12 @@ public class PrometeoCarController : MonoBehaviour
     {
         float engineTorque = engine.GetTorque(input);
 
-        if (Mathf.Abs(input) > 0.05f)
+        if (transmission.Mode == GearMode.Reverse)
+        {
+            engineTorque = -engineTorque;
+        }
+
+        if (input > 0.05f)
         {
             // Low-speed torque protection (prevent engine bogging exploits)
             float rpmFactor = Mathf.InverseLerp(idleRPM * 0.5f, 2000f, telemetry.engineRPM);
@@ -358,16 +408,24 @@ public class PrometeoCarController : MonoBehaviour
         else
         {
             // Engine Braking: resist rotation when throttle is zero
-            float directionSign = Mathf.Sign(Vector3.Dot(rb.linearVelocity, transform.forward));
+            float forwardVel = Vector3.Dot(rb.linearVelocity, transform.forward);
+            float directionSign = Mathf.Sign(forwardVel);
             engineTorque *= directionSign;
 
             // Creep Torque logic (Automatic creep behavior)
-            if (transmission.CurrentGear == 1 && !handbrakePressed && telemetry.carSpeed < creepMaxSpeed)
+            if (transmission.Mode == GearMode.Drive && !handbrakePressed && telemetry.carSpeed < creepMaxSpeed)
             {
                 float creepFactor = 1f - Mathf.InverseLerp(0, creepMaxSpeed, telemetry.carSpeed);
                 engineTorque += idleCreepTorque * creepFactor;
             }
+            else if (transmission.Mode == GearMode.Reverse && !handbrakePressed && telemetry.carSpeed < creepMaxSpeed)
+            {
+                float creepFactor = 1f - Mathf.InverseLerp(0, creepMaxSpeed, telemetry.carSpeed);
+                engineTorque -= idleCreepTorque * creepFactor;
+            }
         }
+
+        if (transmission.Mode == GearMode.Neutral) engineTorque = 0;
 
         telemetry.engineTorque = engineTorque;
 
@@ -379,18 +437,11 @@ public class PrometeoCarController : MonoBehaviour
             transmission.IsShifting,
             Time.fixedDeltaTime);
 
-        // Apply to driven wheels (RWD)
-        rearLeftCollider.motorTorque = wheelTorque * 0.5f;
-        rearRightCollider.motorTorque = wheelTorque * 0.5f;
-
-        // Zero out brakes when accelerating
-        if (Mathf.Abs(input) > 0.05f)
-        {
-            frontLeftCollider.brakeTorque = 0;
-            frontRightCollider.brakeTorque = 0;
-            rearLeftCollider.brakeTorque = 0;
-            rearRightCollider.brakeTorque = 0;
-        }
+        // AWD: Apply torque to all 4 wheels
+        frontLeftCollider.motorTorque = wheelTorque * 0.25f;
+        frontRightCollider.motorTorque = wheelTorque * 0.25f;
+        rearLeftCollider.motorTorque = wheelTorque * 0.25f;
+        rearRightCollider.motorTorque = wheelTorque * 0.25f;
     }
 
     void ApplyTractionControl(ref float torque)
@@ -406,14 +457,29 @@ public class PrometeoCarController : MonoBehaviour
         }
     }
 
-    void ApplyBrakes(float force, float input)
+    void ApplyBrakes(float force, float input, bool isHandbrake)
     {
         float totalBrake = force * input;
-        frontLeftCollider.brakeTorque = totalBrake * brakeBias;
-        frontRightCollider.brakeTorque = totalBrake * brakeBias;
-        rearLeftCollider.brakeTorque = totalBrake * (1f - brakeBias);
-        rearRightCollider.brakeTorque = totalBrake * (1f - brakeBias);
+
+        if (isHandbrake)
+        {
+            // Handbrake locks rear wheels
+            frontLeftCollider.brakeTorque = 0;
+            frontRightCollider.brakeTorque = 0;
+            rearLeftCollider.brakeTorque = totalBrake;
+            rearRightCollider.brakeTorque = totalBrake;
+        }
+        else
+        {
+            // Regular braking (resistance)
+            frontLeftCollider.brakeTorque = totalBrake * brakeBias;
+            frontRightCollider.brakeTorque = totalBrake * brakeBias;
+            rearLeftCollider.brakeTorque = totalBrake * (1f - brakeBias);
+            rearRightCollider.brakeTorque = totalBrake * (1f - brakeBias);
+        }
         
+        frontLeftCollider.motorTorque = 0;
+        frontRightCollider.motorTorque = 0;
         rearLeftCollider.motorTorque = 0;
         rearRightCollider.motorTorque = 0;
         telemetry.wheelTorque = 0f;
