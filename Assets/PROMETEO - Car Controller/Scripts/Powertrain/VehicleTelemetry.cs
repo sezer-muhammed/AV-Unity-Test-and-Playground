@@ -19,6 +19,10 @@ public class VehicleTelemetry
     [Header("Vehicle")]
     public float carSpeed;
     public float wheelSpeed;
+    public float wheelSpeedFL;
+    public float wheelSpeedFR;
+    public float wheelSpeedRL;
+    public float wheelSpeedRR;
     public float wheelSlip;
     public float steeringAngle;
 }

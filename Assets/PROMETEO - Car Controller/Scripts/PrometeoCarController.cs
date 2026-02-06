@@ -38,7 +38,7 @@ public class PrometeoCarController : MonoBehaviour
     [Header("Transmission")]
     public bool automatic = true;
     public float finalDriveRatio = 3.73f;
-    public float[] gearRatios = { 2.87f, 1.89f, 1.28f, 1.00f };
+    public float[] gearRatios = { 2.87f, 1.89f, 1.28f, 1.00f, 0.82f, 0.67f };
     public float reverseRatio = 2.90f;
     public float shiftUpRPM = 5800f;
     public float shiftDownRPM = 2400f; // Increased from 1800 to prevent lugging
@@ -52,6 +52,14 @@ public class PrometeoCarController : MonoBehaviour
     public float converterMaxFactor = 1.75f;
     public float converterFadeSpeed = 18f;
     public int converterGear = 1;
+
+    [Header("Launch / Clutch Slip")]
+    public float launchTargetRPM = 2000f;
+    public float launchSyncSpeed = 12f; // km/h
+    [Range(0f, 1f)]
+    public float launchClutchLock = 0.35f;
+    [Range(0f, 1f)]
+    public float launchThrottleThreshold = 0.1f;
 
     [Header("Automatic Behavior")]
     public float idleCreepTorque = 90f;
@@ -108,6 +116,16 @@ public class PrometeoCarController : MonoBehaviour
     float brakeInput;
     float steeringInput;
     bool handbrakePressed;
+    bool isBraking;
+
+    float wheelMS_FL;
+    float wheelMS_FR;
+    float wheelMS_RL;
+    float wheelMS_RR;
+    float groundMS_FL;
+    float groundMS_FR;
+    float groundMS_RL;
+    float groundMS_RR;
     
     InputAction steeringAction;
     InputAction throttleAction;
@@ -252,23 +270,32 @@ public class PrometeoCarController : MonoBehaviour
     void CalculateWheelTelemetry()
     {
         // AWD telemetry: Average of all wheels
-        float wheelMS_FL = GetWheelLinearSpeed(frontLeftCollider);
-        float wheelMS_FR = GetWheelLinearSpeed(frontRightCollider);
-        float wheelMS_RL = GetWheelLinearSpeed(rearLeftCollider);
-        float wheelMS_RR = GetWheelLinearSpeed(rearRightCollider);
+        wheelMS_FL = GetWheelLinearSpeed(frontLeftCollider);
+        wheelMS_FR = GetWheelLinearSpeed(frontRightCollider);
+        wheelMS_RL = GetWheelLinearSpeed(rearLeftCollider);
+        wheelMS_RR = GetWheelLinearSpeed(rearRightCollider);
 
-        float groundMS_FL = GetLongitudinalGroundSpeed(frontLeftCollider);
-        float groundMS_FR = GetLongitudinalGroundSpeed(frontRightCollider);
-        float groundMS_RL = GetLongitudinalGroundSpeed(rearLeftCollider);
-        float groundMS_RR = GetLongitudinalGroundSpeed(rearRightCollider);
+        groundMS_FL = GetLongitudinalGroundSpeed(frontLeftCollider);
+        groundMS_FR = GetLongitudinalGroundSpeed(frontRightCollider);
+        groundMS_RL = GetLongitudinalGroundSpeed(rearLeftCollider);
+        groundMS_RR = GetLongitudinalGroundSpeed(rearRightCollider);
 
         float slipFL = CalculateSlipRatio(wheelMS_FL, groundMS_FL);
         float slipFR = CalculateSlipRatio(wheelMS_FR, groundMS_FR);
         float slipRL = CalculateSlipRatio(wheelMS_RL, groundMS_RL);
         float slipRR = CalculateSlipRatio(wheelMS_RR, groundMS_RR);
 
+        float wheelKPH_FL = wheelMS_FL * 3.6f;
+        float wheelKPH_FR = wheelMS_FR * 3.6f;
+        float wheelKPH_RL = wheelMS_RL * 3.6f;
+        float wheelKPH_RR = wheelMS_RR * 3.6f;
+
         // Telemetry update
-        telemetry.wheelSpeed = ((wheelMS_FL + wheelMS_FR + wheelMS_RL + wheelMS_RR) / 4f) * 3.6f; // km/h
+        telemetry.wheelSpeed = (wheelKPH_FL + wheelKPH_FR + wheelKPH_RL + wheelKPH_RR) / 4f;
+        telemetry.wheelSpeedFL = wheelKPH_FL;
+        telemetry.wheelSpeedFR = wheelKPH_FR;
+        telemetry.wheelSpeedRL = wheelKPH_RL;
+        telemetry.wheelSpeedRR = wheelKPH_RR;
         telemetry.wheelSlip = (slipFL + slipFR + slipRL + slipRR) / 4f;
     }
 
@@ -302,7 +329,21 @@ public class PrometeoCarController : MonoBehaviour
 
         drivetrain.UpdateLock(dt);
 
-        float engineRPM = engine.UpdateRPM(wheelRPMToEngine, throttleForRPM, drivetrain.LockAmount, dt);
+        float rpmTarget = wheelRPMToEngine;
+        float engineLockForRPM = drivetrain.LockAmount;
+
+        if (transmission.Mode == GearMode.Drive &&
+            transmission.CurrentGear == 1 &&
+            throttleForRPM > launchThrottleThreshold &&
+            telemetry.carSpeed < launchSyncSpeed)
+        {
+            float launchBlend = Mathf.InverseLerp(0f, launchSyncSpeed, telemetry.carSpeed);
+            float launchTarget = Mathf.Max(wheelRPMToEngine, launchTargetRPM);
+            rpmTarget = Mathf.Lerp(launchTarget, wheelRPMToEngine, launchBlend);
+            engineLockForRPM = Mathf.Lerp(launchClutchLock, drivetrain.LockAmount, launchBlend);
+        }
+
+        float engineRPM = engine.UpdateRPM(rpmTarget, throttleForRPM, engineLockForRPM, dt);
 
         if (automatic)
         {
@@ -327,13 +368,17 @@ public class PrometeoCarController : MonoBehaviour
         frontRightCollider.steerAngle = finalAngle;
 
         // Brakes & Acceleration
+        isBraking = false;
+
         if (handbrakePressed)
         {
             ApplyBrakes(handbrakeTorque, 1.0f, true);
+            isBraking = true;
         }
         else if (brakeInput > 0.05f)
         {
             ApplyBrakes(maxBrakeTorque, brakeInput, false);
+            isBraking = true;
         }
         else
         {
@@ -344,7 +389,7 @@ public class PrometeoCarController : MonoBehaviour
             rearRightCollider.brakeTorque = 0;
         }
 
-        if (throttleInput > 0.05f)
+        if (!isBraking && throttleInput > 0.05f)
         {
             CalculateAndApplyTorque(throttleInput);
         }
@@ -364,6 +409,8 @@ public class PrometeoCarController : MonoBehaviour
         frontLeftCollider.steerAngle = finalAngle;
         frontRightCollider.steerAngle = finalAngle;
 
+        isBraking = false;
+
         if (externalAcceleration > 0.05f)
         {
             CalculateAndApplyTorque(externalAcceleration);
@@ -375,6 +422,7 @@ public class PrometeoCarController : MonoBehaviour
         else if (externalAcceleration < -0.05f)
         {
             ApplyBrakes(maxBrakeTorque, Mathf.Abs(externalAcceleration), false);
+            isBraking = true;
             CalculateAndApplyTorque(0);
         }
         else
@@ -413,12 +461,12 @@ public class PrometeoCarController : MonoBehaviour
             engineTorque *= directionSign;
 
             // Creep Torque logic (Automatic creep behavior)
-            if (transmission.Mode == GearMode.Drive && !handbrakePressed && telemetry.carSpeed < creepMaxSpeed)
+            if (!isBraking && transmission.Mode == GearMode.Drive && !handbrakePressed && telemetry.carSpeed < creepMaxSpeed)
             {
                 float creepFactor = 1f - Mathf.InverseLerp(0, creepMaxSpeed, telemetry.carSpeed);
                 engineTorque += idleCreepTorque * creepFactor;
             }
-            else if (transmission.Mode == GearMode.Reverse && !handbrakePressed && telemetry.carSpeed < creepMaxSpeed)
+            else if (!isBraking && transmission.Mode == GearMode.Reverse && !handbrakePressed && telemetry.carSpeed < creepMaxSpeed)
             {
                 float creepFactor = 1f - Mathf.InverseLerp(0, creepMaxSpeed, telemetry.carSpeed);
                 engineTorque -= idleCreepTorque * creepFactor;
@@ -426,8 +474,6 @@ public class PrometeoCarController : MonoBehaviour
         }
 
         if (transmission.Mode == GearMode.Neutral) engineTorque = 0;
-
-        telemetry.engineTorque = engineTorque;
 
         float wheelTorque = drivetrain.Update(
             engineTorque,
@@ -457,6 +503,43 @@ public class PrometeoCarController : MonoBehaviour
         }
     }
 
+    float ApplyAbsToBrakeTorque(float baseTorque, float wheelMS, float groundMS)
+    {
+        const float absSlipThreshold = 0.2f;
+        const float absSlipRange = 0.4f;
+        const float absMinFactor = 0.25f;
+
+        float groundAbs = Mathf.Abs(groundMS);
+        if (groundAbs < 1.0f)
+        {
+            return baseTorque;
+        }
+
+        float slip = (groundAbs - Mathf.Abs(wheelMS)) / groundAbs;
+        if (slip <= absSlipThreshold)
+        {
+            return baseTorque;
+        }
+
+        float t = Mathf.InverseLerp(absSlipThreshold, absSlipThreshold + absSlipRange, slip);
+        float factor = Mathf.Lerp(1f, absMinFactor, t);
+        return baseTorque * factor;
+    }
+
+    void ApplyBrakeWeightTransfer(float input)
+    {
+        if (rb == null || input <= 0f) return;
+
+        float speedFactor = Mathf.Clamp01(telemetry.carSpeed / 5f);
+        float transferForce = rb.mass * Physics.gravity.magnitude * weightTransfer * input * speedFactor;
+
+        Vector3 frontPos = (frontLeftCollider.transform.position + frontRightCollider.transform.position) * 0.5f;
+        Vector3 rearPos = (rearLeftCollider.transform.position + rearRightCollider.transform.position) * 0.5f;
+
+        rb.AddForceAtPosition(-transform.up * transferForce, frontPos);
+        rb.AddForceAtPosition(transform.up * transferForce, rearPos);
+    }
+
     void ApplyBrakes(float force, float input, bool isHandbrake)
     {
         float totalBrake = force * input;
@@ -472,17 +555,16 @@ public class PrometeoCarController : MonoBehaviour
         else
         {
             // Regular braking (resistance)
-            frontLeftCollider.brakeTorque = totalBrake * brakeBias;
-            frontRightCollider.brakeTorque = totalBrake * brakeBias;
-            rearLeftCollider.brakeTorque = totalBrake * (1f - brakeBias);
-            rearRightCollider.brakeTorque = totalBrake * (1f - brakeBias);
+            float frontBrake = totalBrake * brakeBias;
+            float rearBrake = totalBrake * (1f - brakeBias);
+
+            frontLeftCollider.brakeTorque = ApplyAbsToBrakeTorque(frontBrake, wheelMS_FL, groundMS_FL);
+            frontRightCollider.brakeTorque = ApplyAbsToBrakeTorque(frontBrake, wheelMS_FR, groundMS_FR);
+            rearLeftCollider.brakeTorque = ApplyAbsToBrakeTorque(rearBrake, wheelMS_RL, groundMS_RL);
+            rearRightCollider.brakeTorque = ApplyAbsToBrakeTorque(rearBrake, wheelMS_RR, groundMS_RR);
+
+            ApplyBrakeWeightTransfer(input);
         }
-        
-        frontLeftCollider.motorTorque = 0;
-        frontRightCollider.motorTorque = 0;
-        rearLeftCollider.motorTorque = 0;
-        rearRightCollider.motorTorque = 0;
-        telemetry.wheelTorque = 0f;
     }
 
     void ApplyAntiRollBar(WheelCollider left, WheelCollider right)

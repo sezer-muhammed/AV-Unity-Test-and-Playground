@@ -14,6 +14,10 @@ public class TelemetryLogger : MonoBehaviour
         public bool isShifting;
         public float carSpeed;
         public float wheelSpeed;
+        public float wheelSpeedFL;
+        public float wheelSpeedFR;
+        public float wheelSpeedRL;
+        public float wheelSpeedRR;
         public float torque;
         public float engineTorque;
         public float drivetrainLock;
@@ -54,6 +58,10 @@ public class TelemetryLogger : MonoBehaviour
             isShifting = data.isShifting,
             carSpeed = data.carSpeed,
             wheelSpeed = data.wheelSpeed,
+            wheelSpeedFL = data.wheelSpeedFL,
+            wheelSpeedFR = data.wheelSpeedFR,
+            wheelSpeedRL = data.wheelSpeedRL,
+            wheelSpeedRR = data.wheelSpeedRR,
             torque = data.wheelTorque,
             engineTorque = data.engineTorque,
             drivetrainLock = data.drivetrainLock,
