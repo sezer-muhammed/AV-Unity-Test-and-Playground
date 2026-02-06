@@ -461,6 +461,12 @@ public class PrometeoCarController : MonoBehaviour
 
     void ApplyExternalGearMode()
     {
+        if (transmission == null)
+        {
+            InitializePowertrain();
+            if (transmission == null) return;
+        }
+
         if (telemetry.carSpeed > 1f) return;
         if (transmission.Mode != externalGearMode)
         {
