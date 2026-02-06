@@ -66,7 +66,7 @@ public class Transmission
         if (Mode == GearMode.Drive) CurrentGear = 1;
     }
 
-    public bool Update(float rpm, float dt)
+    public bool Update(float rpm, float dt, bool allowShift)
     {
         bool shiftStarted = false;
 
@@ -78,7 +78,7 @@ public class Transmission
                 IsShifting = false;
             }
         }
-        else if (Mode == GearMode.Drive)
+        else if (Mode == GearMode.Drive && allowShift)
         {
             if (rpm > shiftUpRPM && CurrentGear < gears.Length)
             {

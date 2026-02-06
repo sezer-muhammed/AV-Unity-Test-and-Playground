@@ -49,7 +49,7 @@ public class Engine
         }
     }
 
-    public float UpdateRPM(float wheelRPM, float throttle, float drivetrainLock, float dt)
+    public float UpdateRPM(float wheelRPM, float throttle, float drivetrainLock, float dt, bool applyLimiter)
     {
         float throttleAbs = Mathf.Clamp01(Mathf.Abs(throttle));
         float freeRPM = Mathf.Lerp(idleRPM, redlineRPM, throttleAbs);
@@ -59,7 +59,7 @@ public class Engine
         float smoothTime = 0.12f * inertia;
         CurrentRPM = Mathf.SmoothDamp(CurrentRPM, target, ref rpmVelocity, smoothTime, Mathf.Infinity, dt);
 
-        if (useRevLimiter && CurrentRPM > redlineRPM)
+        if (useRevLimiter && applyLimiter && CurrentRPM > redlineRPM)
         {
             CurrentRPM = redlineRPM;
         }

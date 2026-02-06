@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Serialization;
 
 public enum VehicleState
 {
@@ -31,7 +32,9 @@ public class PrometeoCarController : MonoBehaviour
         new Keyframe(2800, 0.95f),
         new Keyframe(3600, 1.00f),
         new Keyframe(5200, 0.88f),
-        new Keyframe(6200, 0.72f)
+        new Keyframe(6200, 0.72f),
+        new Keyframe(6600, 0.40f),
+        new Keyframe(7200, 0.01f)
     );
     public bool useRevLimiter = true;
 
@@ -104,7 +107,11 @@ public class PrometeoCarController : MonoBehaviour
     public InputActionAsset inputActions;
     public bool useExternalInput = false;
     public float externalSteering = 0f;
-    public float externalAcceleration = 0f;
+    [FormerlySerializedAs("externalAcceleration")]
+    public float externalThrottle = 0f;
+    public float externalBrake = 0f;
+    public bool externalHandbrake = false;
+    public GearMode externalGearMode = GearMode.Drive;
 
     [Header("Telemetry")]
     public VehicleTelemetry telemetry = new VehicleTelemetry();
@@ -177,23 +184,19 @@ public class PrometeoCarController : MonoBehaviour
     {
         if (telemetry.carSpeed > 1f) return;
 
-        GearMode currentMode = transmission.Mode;
-        GearMode nextMode = currentMode;
-
-        switch (currentMode)
+        // Cycle Reverse -> Hold(Neutral) -> Forward(Drive) when stopped
+        switch (transmission.Mode)
         {
             case GearMode.Drive:
-                nextMode = GearMode.Neutral;
-                break;
-            case GearMode.Neutral:
-                nextMode = GearMode.Reverse;
+                transmission.SetMode(GearMode.Reverse);
                 break;
             case GearMode.Reverse:
-                nextMode = GearMode.Drive;
+                transmission.SetMode(GearMode.Neutral);
+                break;
+            case GearMode.Neutral:
+                transmission.SetMode(GearMode.Drive);
                 break;
         }
-
-        transmission.SetMode(nextMode);
     }
 
     void InitializePowertrain()
@@ -251,6 +254,10 @@ public class PrometeoCarController : MonoBehaviour
         telemetry.carSpeed = rb.linearVelocity.magnitude * 3.6f;
         
         CalculateWheelTelemetry();
+        if (useExternalInput)
+        {
+            ApplyExternalGearMode();
+        }
         UpdatePowertrain(Time.fixedDeltaTime);
 
         if (useExternalInput)
@@ -325,29 +332,38 @@ public class PrometeoCarController : MonoBehaviour
         // AWD: Average RPM of all wheels
         float avgDrivenWheelRPM = (frontLeftCollider.rpm + frontRightCollider.rpm + rearLeftCollider.rpm + rearRightCollider.rpm) / 4f;
         float wheelRPMToEngine = Mathf.Abs(avgDrivenWheelRPM) * transmission.TotalRatio;
-        float throttleForRPM = useExternalInput ? Mathf.Abs(externalAcceleration) : Mathf.Abs(throttleInput);
+        float throttleForRPM = useExternalInput ? Mathf.Clamp01(externalThrottle) : Mathf.Abs(throttleInput);
 
         drivetrain.UpdateLock(dt);
 
         float rpmTarget = wheelRPMToEngine;
         float engineLockForRPM = drivetrain.LockAmount;
 
+        bool launchActive = false;
         if (transmission.Mode == GearMode.Drive &&
             transmission.CurrentGear == 1 &&
             throttleForRPM > launchThrottleThreshold &&
             telemetry.carSpeed < launchSyncSpeed)
         {
+            launchActive = true;
             float launchBlend = Mathf.InverseLerp(0f, launchSyncSpeed, telemetry.carSpeed);
             float launchTarget = Mathf.Max(wheelRPMToEngine, launchTargetRPM);
             rpmTarget = Mathf.Lerp(launchTarget, wheelRPMToEngine, launchBlend);
             engineLockForRPM = Mathf.Lerp(launchClutchLock, drivetrain.LockAmount, launchBlend);
         }
 
-        float engineRPM = engine.UpdateRPM(rpmTarget, throttleForRPM, engineLockForRPM, dt);
+        bool drivelineLocked = transmission.Mode != GearMode.Neutral &&
+            !transmission.IsShifting &&
+            engineLockForRPM >= 0.99f &&
+            drivetrain.LockAmount >= 0.99f;
+
+        // When the driveline is locked, let wheel RPM drive engine RPM (no limiter clamp).
+        float engineRPM = engine.UpdateRPM(rpmTarget, throttleForRPM, engineLockForRPM, dt, !drivelineLocked);
 
         if (automatic)
         {
-            bool shiftStarted = transmission.Update(engineRPM, dt);
+            bool allowShift = !launchActive || transmission.IsShifting;
+            bool shiftStarted = transmission.Update(engineRPM, dt, allowShift);
             if (shiftStarted)
             {
                 drivetrain.OnShift();
@@ -410,28 +426,45 @@ public class PrometeoCarController : MonoBehaviour
         frontRightCollider.steerAngle = finalAngle;
 
         isBraking = false;
+        handbrakePressed = externalHandbrake;
 
-        if (externalAcceleration > 0.05f)
+        float throttle = Mathf.Clamp01(externalThrottle);
+        float brake = Mathf.Clamp01(externalBrake);
+
+        if (handbrakePressed)
         {
-            CalculateAndApplyTorque(externalAcceleration);
+            ApplyBrakes(handbrakeTorque, 1.0f, true);
+            isBraking = true;
+        }
+        else if (brake > 0.05f)
+        {
+            ApplyBrakes(maxBrakeTorque, brake, false);
+            isBraking = true;
+        }
+        else
+        {
             frontLeftCollider.brakeTorque = 0;
             frontRightCollider.brakeTorque = 0;
             rearLeftCollider.brakeTorque = 0;
             rearRightCollider.brakeTorque = 0;
         }
-        else if (externalAcceleration < -0.05f)
+
+        if (!isBraking && throttle > 0.05f)
         {
-            ApplyBrakes(maxBrakeTorque, Mathf.Abs(externalAcceleration), false);
-            isBraking = true;
-            CalculateAndApplyTorque(0);
+            CalculateAndApplyTorque(throttle);
         }
         else
         {
             CalculateAndApplyTorque(0);
-            frontLeftCollider.brakeTorque = 0;
-            frontRightCollider.brakeTorque = 0;
-            rearLeftCollider.brakeTorque = 0;
-            rearRightCollider.brakeTorque = 0;
+        }
+    }
+
+    void ApplyExternalGearMode()
+    {
+        if (telemetry.carSpeed > 1f) return;
+        if (transmission.Mode != externalGearMode)
+        {
+            transmission.SetMode(externalGearMode);
         }
     }
 
